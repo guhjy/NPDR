@@ -74,7 +74,7 @@ npDR<-function(counter,bs=F,bootNum=100){
   cat("Now running iteration",i,"with a sample size of",n,'\n');flush.console()
   
   # confounders
-  sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-8
+  sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-2
   x <- rmvnorm(n, mean=rep(0,4), sigma=sigma)
   
   #GGally::ggpairs(data.frame(x))
