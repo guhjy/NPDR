@@ -73,11 +73,6 @@ sl.lib<-c("SL.glmnet.0","SL.glmnet.0.5","SL.glmnet","SL.rpartPrune",
           "SL.ranger","SL.ranger1","SL.ranger2","SL.ranger3","SL.ranger4","SL.ranger5",
           "SL.bayesglm","SL.xgboost","SL.mean",xgb_grid$names)
 
-sl.lib<-c("SL.glmnet.0","SL.glmnet.0.5","SL.glmnet","SL.rpartPrune",
-          "SL.gam.3","SL.gam.4","SL.gam.5","SL.earth",
-          "SL.ranger","SL.ranger1","SL.ranger2",
-          "SL.bayesglm","SL.mean")
-
 npDR<-function(counter,bs=F,bootNum=100){
   # data management
   i<-counter
