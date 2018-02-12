@@ -2,10 +2,8 @@
 args=(commandArgs(TRUE))
 
 packages <- c("foreach","doParallel","doRNG","boot",
-              "rmutil","mvtnorm","gam","sandwich",
-              "devtools","glmnet","data.table","rpart",
-              "ranger","nnet","arm","earth","e1071","xgboost",
-              "foreach")
+              "mvtnorm","devtools","glmnet","data.table",
+              "ranger","xgboost","foreach")
 
 for (package in packages) {
   if (!require(package, character.only=T, quietly=T)) {
@@ -20,7 +18,7 @@ for (package in packages) {
 devtools::install_github("ecpolley/SuperLearner") 
 library(SuperLearner)
 
-# not sure I need rJava, as ck37r is no longer being used
+# don't need rJava, as ck37r is no longer being used
 # https://stackoverflow.com/questions/12872699/error-unable-to-load-installed-packages-just-now/25932828#25932828
 #install.packages("rJava",repos='http://lib.stat.cmu.edu/R/CRAN') 
 #library(rJava)
@@ -46,35 +44,30 @@ res.est <- data.frame(matrix(nrow=1,ncol=length(cols)));
 colnames(res.est) <- cols
 res.se <- res.est
 
+init<-data.frame(type=NA,n=NA,res.est)
+write.table(init,"./results_test.txt",sep="\t",row.names=F)
+
 ##  true value
 true<-3
 
-glmnet_learner = create.Learner("SL.glmnet", tune=list(alpha=seq(0,1,length.out=3))) 
-gam_learner = create.Learner("SL.gam", tune=list(deg.gam=c(2,3,4,5))) 
-ranger_learner = create.Learner("SL.ranger", tune=list(num.trees=c(500,1000),mtry=c(2,3)))
-xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000), 
-                                                           max_depth = c(1,2), 
-                                                           shrinkage = c(0.1, 0.001)))
-earth_learner = create.Learner("SL.earth",tune=list(degree=c(1,2),
-                                                    nk=c(4,5),
-                                                    minspan=c(0,1),
-                                                    endspan=c(0,1)))
+ranger_learner = create.Learner("SL.ranger", tune=list(num.trees=c(500,1000,1500),mtry=c(2,3)))
+# xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000,1500),
+#                                                            max_depth = c(1,2),
+#                                                            shrinkage = c(0.1, 0.001)))
+# glmnet_learner = create.Learner("SL.glmnet", tune=list(alpha=seq(0,1,length.out=5))) 
 
-sl.lib<-c(glmnet_learner$names,"SL.rpartPrune",
-          gam_learner$names,"SL.glm.interaction",earth_learner$names,
-          ranger_learner$names,xgboost_learner$names,
-          "SL.bayesglm","SL.mean")
+sl.lib<-ranger_learner$names
 
 npDR<-function(counter,bs=F,bootNum=100){
   # data management
   i<-counter
-  samp<-rep(1:5,nsim*5)[counter]
+  samp<-rep(1:4,nsim*4)[counter]
   ss<-c(100,200,600,1200)
   n<-ss[samp]
   cat("Now running iteration",i,"with a sample size of",n,'\n');flush.console()
   
   # confounders
-  sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-2
+  sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-1
   x <- rmvnorm(n, mean=rep(0,4), sigma=sigma)
   
   #GGally::ggpairs(data.frame(x))
@@ -96,9 +89,9 @@ npDR<-function(counter,bs=F,bootNum=100){
   # design matrix for propensity score model
   mu <- dMatT%*%beta
   # propensity score model
-  pi <- expit(dMatT%*%theta);r<-rbinom(n,1,pi)
-  # outcome model: true expsoure effect = 6
-  y <- r*true + mu + rnorm(n,0,6)
+  pi <- 1-expit(dMatT%*%theta);r<-rbinom(n,1,pi)
+  # outcome model: true expsoure effect = 3
+  y <- r*true + mu + rnorm(n,0,12)
 
   # induce misspecification
   dMat<-model.matrix(as.formula(paste("~(",paste("z[,",1:ncol(x),"]",collapse="+"),")")))
@@ -110,10 +103,6 @@ npDR<-function(counter,bs=F,bootNum=100){
   tgForm<-as.formula(paste0("A~", paste(paste0("W",1:ncol(dMatT[,-1])), collapse="+")))
   
   tmlePMT <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
-  
-  folds<-c(2,2,3,5,5)[samp]
-  cat("Number of cross-validation folds is",folds,'\n');flush.console()
-  
   tmleNPT <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
 
   pihatPT <- tmlePMT$g$g1W
@@ -128,9 +117,8 @@ npDR<-function(counter,bs=F,bootNum=100){
   W <- dMat[,-1];colnames(W) <- paste("W",1:ncol(dMat[,-1]), sep="");A <- r;Y <- y
   tQForm<-as.formula(paste0("Y~A+", paste(paste0("W",1:ncol(dMat[,-1])), collapse="+")))
   tgForm<-as.formula(paste0("A~", paste(paste0("W",1:ncol(dMat[,-1])), collapse="+")))
-  tmlePMF <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
   
-  folds<-c(2,2,3,5,5)[samp]
+  tmlePMF <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
   tmleNPF <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
   
   pihatPF <- tmlePMF$g$g1W
@@ -252,14 +240,14 @@ npDR<-function(counter,bs=F,bootNum=100){
   print(round(tmp,3));cat('\n');flush.console()
   setDT(tmp, keep.rownames = TRUE)[];colnames(tmp)[1] <- "type"
   
-  if(i==1&samp==1){
-    write.table(tmp,"results.txt",sep="\t",row.names=F)
-  } else{
-    write.table(tmp,"results.txt",sep="\t",row.names=F,col.names=F,append=T)
-  }
+  # if(!file.exitst("./results.txt")){
+  #   write.table(tmp,"results.txt",sep="\t",row.names=F)
+  # } else{
+  write.table(tmp,"results_test.txt",sep="\t",row.names=F,col.names=F,append=T)
+  #}
   return(tmp)
 }
 
-cores<-20 
-results<-mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
+cores<-20
+mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
 proc.time()-time
