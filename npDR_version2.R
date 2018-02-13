@@ -1,10 +1,9 @@
 # load libraries/functions
 args=(commandArgs(TRUE))
 
-args <- list(1,2)
-packages <- c("foreach","doParallel","doRNG","boot","randomForest",
+packages <- c("foreach","doParallel","doRNG","boot","ranger",
               "mvtnorm","devtools","glmnet","data.table",
-              "xgboost","foreach")
+              "xgboost","foreach","ggplot2")
 
 for (package in packages) {
   if (!require(package, character.only=T, quietly=T)) {
@@ -58,16 +57,17 @@ write.table(init,"./results_test.txt",sep="\t",row.names=F)
 ##  true value
 true<-3
 
-ranger_learner = create.Learner("SL.ranger", tune=list(num.trees=c(500,1000,1500),mtry=c(2,3)))
-xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000,1500),
-                                                           max_depth = c(1,2),
-                                                           shrinkage = c(0.1, 0.001)))
+ranger_learner = create.Learner("SL.ranger", tune=list(num.trees=c(1500),min.node.size=c(2,5,10),mtry=c(2,3)))
+# xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000,1500),
+#                                                            max_depth = c(1,2),
+#                                                            shrinkage = c(0.1, 0.001)))
 # glmnet_learner = create.Learner("SL.glmnet", tune=list(alpha=seq(0,1,length.out=5))) 
 
 sl.lib<-c(ranger_learner$names)
 
 npDR<-function(counter,bs=F,bootNum=100){
   # data management
+  set.seed(counter)
   i<-counter
   samp<-rep(1:4,nsim*4)[counter]
   ss<-c(100,200,600,1200)
@@ -78,36 +78,27 @@ npDR<-function(counter,bs=F,bootNum=100){
   sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-1
   x <- rmvnorm(n, mean=rep(0,4), sigma=sigma)
   
-  if(i==4){
-    pdf("./plot1.pdf",width=4,height=4)
-    GGally::ggpairs(data.frame(x))
-    dev.off()
-  }
-
   z<-x
   z[,1]<-exp(x[,1]/2)
   z[,2]<-x[,2]/(1+exp(x[,1]))+10
   z[,3]<-(x[,1]*x[,3]/25+.6)^3
   z[,4]<-(x[,2]*x[,4]+20)^2
   
-  if(i==4){
-    pdf("./plot1.pdf",width=4,height=4)
-    GGally::ggpairs(data.frame(z))
-    dev.off()
-  }
-  
   # design matrix for exposure and outcome model
   dMatT<-model.matrix(as.formula(paste("~(",paste("x[,",1:ncol(x),"]",collapse="+"),")")))
   
   beta<-c(120,3,3,3,3) 
-  theta<-c(-2,log(2),log(2),log(2),log(2))
+  theta<-c(-1,log(1.5),log(1.5),log(1.5),log(1.5))
   
   # design matrix for propensity score model
   mu <- dMatT%*%beta
   # propensity score model
-  pi <- 1-expit(dMatT%*%theta);r<-rbinom(n,1,pi)
+  pi <- expit(dMatT%*%theta);r<-rbinom(n,1,pi)
   # outcome model: true expsoure effect = 3
   y <- r*true + mu + rnorm(n,0,12)
+  
+  # D<-data.frame(pA=pi,A=factor(r,levels=c("0","1")))
+  # ggplot(D,aes(pA,color=A))+geom_density()
 
   # induce misspecification
   dMat<-model.matrix(as.formula(paste("~(",paste("z[,",1:ncol(x),"]",collapse="+"),")")))
@@ -120,13 +111,18 @@ npDR<-function(counter,bs=F,bootNum=100){
   
   cat("Running correct parametric TMLE",'\n');flush.console()
   tmlePMT <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
-  
-  cat("SL Library",'\n');flush.console()
-  print(sl.lib)
+#  maxWPT <- max(1/((A*tmlePMT$g$g1W)+(1-A)*(1-tmlePMT$g$g1W)))
   
   cat("Running correct nonparametric TMLE",'\n');flush.console()
-  tmleNPT <- tmle(Y,A,data.frame(W),family="gaussian",
-                  Q.SL.library=sl.lib,g.SL.library=sl.lib,verbose=T)
+  tmleNPT <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
+#  maxWNPT <- max(1/((A*tmleNPT$g$g1W)+(1-A)*(1-tmleNPT$g$g1W)))
+  
+  # pld<-data.frame(pA=tmlePMT$g$g1W,A=factor(A,levels=c("0","1")))
+  # cc<-.005
+  # ggplot(pld,aes(pA,color=A)) + geom_density() + 
+  #   theme_classic() + scale_y_continuous(expand=c(cc,cc)) +
+  #   scale_x_continuous(expand=c(cc,cc)) + 
+  #   theme(legend.position = c(.75,.75))
 
   pihatPT <- tmlePMT$g$g1W
   pihatNPT <- tmleNPT$g$g1W
@@ -144,8 +140,12 @@ npDR<-function(counter,bs=F,bootNum=100){
   cat("Running misspecified parametric TMLE",'\n');flush.console()
   tmlePMF <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
   
+#  maxWPF <- max(1/((A*tmlePMF$g$g1W)+(1-A)*(1-tmlePMF$g$g1W)))
+  
   cat("Running misspecified nonparametric TMLE",'\n');flush.console()
   tmleNPF <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
+
+#  maxWNPF <- max(1/((A*tmleNPF$g$g1W)+(1-A)*(1-tmleNPF$g$g1W)))
   
   pihatPF <- tmlePMF$g$g1W
   pihatNPF <- tmleNPF$g$g1W
@@ -259,8 +259,8 @@ npDR<-function(counter,bs=F,bootNum=100){
   res.width <- (res.est+1.96*res.se/sqrt(n)) - (res.est-1.96*res.se/sqrt(n))
   
   tmp<-data.frame(rbind(res.est-true,(res.est-true)^2,res.cov,res.width))
-  tmp<-cbind(n,tmp)
-  rownames(tmp)<-c("bias","rmse","cov","width");colnames(tmp)[1]<-"N";
+  tmp<-cbind(i,n,tmp)
+  rownames(tmp)<-c("bias","rmse","cov","width");colnames(tmp)[1:2]<-c("run","N");
   cat('\n')
   cat("Printing Results",'\n')
   print(round(tmp,3));cat('\n');flush.console()
@@ -274,8 +274,16 @@ npDR<-function(counter,bs=F,bootNum=100){
   return(tmp)
 }
 
-lapply(1:(nsim*4), function(x) npDR(x,bs=F))
-
-# cores<-20
-# mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
+cores<-20
+mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
 proc.time()-time
+
+
+# library(ggplot2)
+# thm <- theme_classic() 
+# theme_set(thm)
+# scale_C <-  scale_x_continuous(expand=c(0,0)) + scale_y_continuous(expand=c(0,0))
+# 
+# set.seed(123)
+# a <- data.frame(var=rnorm(2000))
+# ggplot(a,aes(var)) + geom_histogram()
