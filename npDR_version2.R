@@ -1,9 +1,10 @@
 # load libraries/functions
 args=(commandArgs(TRUE))
 
-packages <- c("foreach","doParallel","doRNG","boot",
+args <- list(1,2)
+packages <- c("foreach","doParallel","doRNG","boot","randomForest",
               "mvtnorm","devtools","glmnet","data.table",
-              "ranger","xgboost","foreach")
+              "xgboost","foreach")
 
 for (package in packages) {
   if (!require(package, character.only=T, quietly=T)) {
@@ -18,10 +19,17 @@ for (package in packages) {
 devtools::install_github("ecpolley/SuperLearner") 
 library(SuperLearner)
 
+# devtools::install_github("imbs-hl/ranger")
+# library(ranger)
+
 # don't need rJava, as ck37r is no longer being used
 # https://stackoverflow.com/questions/12872699/error-unable-to-load-installed-packages-just-now/25932828#25932828
 #install.packages("rJava",repos='http://lib.stat.cmu.edu/R/CRAN') 
 #library(rJava)
+
+# install.packages("bartMachine",repos='http://lib.stat.cmu.edu/R/CRAN')
+# options(java.parameters = "-Xmx5g")
+# library(bartMachine)
 
 #devtools::install_github("ck37/ck37r")
 #library(ck37r)
@@ -51,12 +59,12 @@ write.table(init,"./results_test.txt",sep="\t",row.names=F)
 true<-3
 
 ranger_learner = create.Learner("SL.ranger", tune=list(num.trees=c(500,1000,1500),mtry=c(2,3)))
-# xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000,1500),
-#                                                            max_depth = c(1,2),
-#                                                            shrinkage = c(0.1, 0.001)))
+xgboost_learner = create.Learner("SL.xgboost", tune = list(ntrees = c(500,1000,1500),
+                                                           max_depth = c(1,2),
+                                                           shrinkage = c(0.1, 0.001)))
 # glmnet_learner = create.Learner("SL.glmnet", tune=list(alpha=seq(0,1,length.out=5))) 
 
-sl.lib<-ranger_learner$names
+sl.lib<-c(ranger_learner$names)
 
 npDR<-function(counter,bs=F,bootNum=100){
   # data management
@@ -70,15 +78,23 @@ npDR<-function(counter,bs=F,bootNum=100){
   sigma<-matrix(0,nrow=4,ncol=4);diag(sigma)<-1
   x <- rmvnorm(n, mean=rep(0,4), sigma=sigma)
   
-  #GGally::ggpairs(data.frame(x))
-  
+  if(i==4){
+    pdf("./plot1.pdf",width=4,height=4)
+    GGally::ggpairs(data.frame(x))
+    dev.off()
+  }
+
   z<-x
   z[,1]<-exp(x[,1]/2)
   z[,2]<-x[,2]/(1+exp(x[,1]))+10
   z[,3]<-(x[,1]*x[,3]/25+.6)^3
   z[,4]<-(x[,2]*x[,4]+20)^2
   
-  #GGally::ggpairs(data.frame(z))
+  if(i==4){
+    pdf("./plot1.pdf",width=4,height=4)
+    GGally::ggpairs(data.frame(z))
+    dev.off()
+  }
   
   # design matrix for exposure and outcome model
   dMatT<-model.matrix(as.formula(paste("~(",paste("x[,",1:ncol(x),"]",collapse="+"),")")))
@@ -102,8 +118,15 @@ npDR<-function(counter,bs=F,bootNum=100){
   tQForm<-as.formula(paste0("Y~A+", paste(paste0("W",1:ncol(dMatT[,-1])), collapse="+")))
   tgForm<-as.formula(paste0("A~", paste(paste0("W",1:ncol(dMatT[,-1])), collapse="+")))
   
+  cat("Running correct parametric TMLE",'\n');flush.console()
   tmlePMT <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
-  tmleNPT <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
+  
+  cat("SL Library",'\n');flush.console()
+  print(sl.lib)
+  
+  cat("Running correct nonparametric TMLE",'\n');flush.console()
+  tmleNPT <- tmle(Y,A,data.frame(W),family="gaussian",
+                  Q.SL.library=sl.lib,g.SL.library=sl.lib,verbose=T)
 
   pihatPT <- tmlePMT$g$g1W
   pihatNPT <- tmleNPT$g$g1W
@@ -118,7 +141,10 @@ npDR<-function(counter,bs=F,bootNum=100){
   tQForm<-as.formula(paste0("Y~A+", paste(paste0("W",1:ncol(dMat[,-1])), collapse="+")))
   tgForm<-as.formula(paste0("A~", paste(paste0("W",1:ncol(dMat[,-1])), collapse="+")))
   
+  cat("Running misspecified parametric TMLE",'\n');flush.console()
   tmlePMF <- tmle(Y,A,W,family="gaussian",Qform=tQForm,gform=tgForm)
+  
+  cat("Running misspecified nonparametric TMLE",'\n');flush.console()
   tmleNPF <- tmle(Y,A,data.frame(W),family="gaussian",Q.SL.library=sl.lib,g.SL.library=sl.lib)
   
   pihatPF <- tmlePMF$g$g1W
@@ -248,6 +274,8 @@ npDR<-function(counter,bs=F,bootNum=100){
   return(tmp)
 }
 
-cores<-20
-mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
+lapply(1:(nsim*4), function(x) npDR(x,bs=F))
+
+# cores<-20
+# mclapply(1:(nsim*4), function(x) npDR(x,bs=F),mc.cores=cores)
 proc.time()-time
